@@ -20,4 +20,5 @@ xxx = User(name=,age=)
 #添加
 xxx.save()
 ```
-
+[ORM介绍](https://github.com/kidoom/myorm/blob/main/orm%E4%BB%8B%E7%BB%8D)
+[实现思路](https://github.com/kidoom/myorm/blob/main/%E5%AE%9E%E7%8E%B0%E6%B5%81%E7%A8%8B)
