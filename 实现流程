@@ -1,0 +1,184 @@
+## 一》编写orm框架（python实现）
+
+**我们来看一下在flask的sqlachemy中我们是怎样使用orm框架**：
+
+```python
+from exts import db
+
+class UserModel(db.Model):
+    __tablename__ = 'user'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    username = db.Column(db.String(200), nullable=False, unique=True)
+    email = db.Column(db.String(100), nullable=False, unique=True)
+    password = db.Column(db.String(200), nullable=False)
+    join_time = db.Column(db.DateTime, default=datetime.now)
+# 我们定义了这样一个类  可以以输入id等等我们需要写的字段
+# colum  后面是属性描述符 通过定义属性描述符 来实现对字段的限制
+
+#以表单输入添加为例：
+@bp.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == "GET":
+        return render_template("register.html")
+    else:
+        form = RegisterForm(request.form)
+        if form.validate():  # 如果表单验证成功 则重定向进入登陆页面
+            email = form.email.data
+            username = form.username.data
+            password = form.password.data
+
+            user = UserModel(email=email, username=username, password=password)
+            db.session.add(user)  # 同时储存用户信息
+            db.session.commit()
+            return redirect(url_for("user.login"))  # 重定向url路由
+        else:
+            return redirect(url_for("user.register"))
+   # 我们希望完成一个什么事情呢？通过属性描述符的限制，我们希望我们定义的类User的实例可以被创建qie能够通过映射被储存在数据库中  所以orm的基本机制已经浮现了 但是同时别人的框架还是有许多更加复杂的业务逻辑的。
+
+
+
+```
+
+**代码实现**:
+
+```python
+# 需求
+import pymysql
+import numbers
+
+db = pymysql.connect(host='localhost',
+                     user='root',
+                     password='123456',
+                     database='dbtest1',
+                     port=3306,
+                     autocommit=True)
+
+# 使用cursor()方法获取操作游标
+cursor = db.cursor()
+
+
+
+
+
+class Field:
+    pass
+
+
+class IntField(Field):
+    # 数据描述符
+    def __init__(self, db_colum, min_value=None, max_value=None):
+        self._value = None
+        self.min_value = min_value
+        self.max_value = max_value
+        self.db_colum = db_colum
+        if min_value is not None:
+            if not isinstance(min_value, numbers.Integral):
+                raise ValueError("min_value must be int")
+            elif min_value < 0:
+                raise ValueError("min_value must be positive int")
+
+        if max_value is not None:
+            if not isinstance(max_value, numbers.Integral):
+                raise ValueError("max_value must be int")
+            elif max_value < 0:
+                raise ValueError("max_value must be positive int")
+
+        if min_value and max_value is not None:
+            if min_value > max_value:
+                raise ValueError("min_value must be smaller than max_value")
+
+    def __get__(self, instance, owner):
+        return self.value
+
+    def __set__(self, instance, value):
+        if not isinstance(value, numbers.Integral):
+            raise ValueError("int value need")
+        if value < self.min_value or value > self.max_value:
+            raise ValueError("value must between min_value and max_value")
+
+        self.value = value
+
+
+class CharField(Field):
+    def __init__(self, db_colum, max_length=None):
+        self._value = None
+        self.db_colum = db_colum
+        self.max_length = max_length
+
+    def __get__(self, instance, owner):
+        return self.value  # 返回一个实例
+
+    def __set__(self, instance, value):
+        if not isinstance(value, str):
+            raise ValueError("String value need")
+        if len(value) > self.max_length:
+            return ValueError("value length excess len of max_length")
+
+        self.value = value
+
+
+# 元创建元类来拦截初始类的创建
+class ModelMetaClass(type):
+    def __new__(cls, name, bases, attrs, **kwargs):
+        if name == "BaseModel":
+            return super().__new__(cls, name, bases, attrs, **kwargs)
+        fields = {}  # 让fields记录所有数据表相关的列
+        for key, value in attrs.items():  # 创建field类型
+            if isinstance(value, Field):
+                fields[key] = value  # value赋值给fields
+        attrs_meta = attrs.get("Meta", None)
+        _meta = {}
+        db_table = name.lower()
+        if attrs_meta is not None:
+            table = getattr(attrs_meta, "db_table", None)
+            if table is not None:
+                db_table = table  # 如果不是空 那我就替换掉table空值
+        _meta["db_table"] = db_table  # db_table 来储存表名
+        attrs["_meta"] = _meta
+        attrs["fields"] = fields
+        return super().__new__(cls, name, bases, attrs, **kwargs)
+
+
+class BaseModel(metaclass=ModelMetaClass):
+    def __init__(self, *args, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        return super().__init__()
+
+    def save(self):
+        fields = []
+        values = []
+        for key, value in self.fields.items():
+            db_colum = value.db_colum
+            if db_colum is None:
+                db_colum = key.lower()
+            fields.append(db_colum)
+            value = getattr(self, key)
+            values.append(str(value))
+        sql_save = """INSERT INTO {db_table}({fields}) VALUES({values})""".format(db_table=self._meta["db_table"],
+                                                                                  fields=",".join(fields),
+                                                                                  values=",".join(values))
+        try:
+            # 执行sql语句
+            cursor.execute(sql_save)
+            # 提交到数据库执行
+            db.commit()
+            print("执行成功")
+        except:
+            # 如果发生错误则回滚
+            db.rollback()
+            print("执行失败")
+        pass
+
+
+if __name__ == "__main__":
+    class User(BaseModel):
+        name = CharField(db_colum="name", max_length=100)
+        age = IntField(db_colum="age", min_value=1, max_value=100)
+
+
+    user = User(name="'lzh'", age=19)
+    user.save()
+
+```
+
